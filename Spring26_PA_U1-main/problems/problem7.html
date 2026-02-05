@@ -104,7 +104,18 @@
     // [m20]
     // ]
     function multiply_3x3_matrix_and_3x1_vector(matrix, vector) {
-        // todo: implement this function!
+        let output = [];
+        for (let i = 0; i < 3; i++) {
+            let sum = 0;
+            
+            for (let j = 0; j < 3; j++) {
+                sum += matrix[i][j] * vector[j][0];
+            }
+
+            output.push([sum]);
+        }
+
+        return output;
     }
 
     engine.animation_loop(() => {
@@ -112,15 +123,28 @@
 
         // todo: use your new multiply_3x3_matrix_and_3x1_vector and a map function to get new_standard_points and new_wireframe_points variables
         // todo: that are made by multiplying m by all the points in these respective lists.
+        let new_standard_points = standard_points.map(point => {
+            let vec = [[point[0]], [point[1]], [point[2]]];
+            let result = multiply_3x3_matrix_and_3x1_vector(m, vec);
+            return [result[0][0], result[1][0], result[2][0]];
+        });
+
+        let new_wireframe_points = wireframe_points.map(point => {
+            let vec = [[point[0]], [point[1]], [point[2]]];
+            let result = multiply_3x3_matrix_and_3x1_vector(m, vec);
+            return [result[0][0], result[1][0], result[2][0]];
+        });
 
 
         // todo: uncomment these lines after you've computed new_standard_points and new_wireframe_points
-        // engine.update_vertex_positions_of_mesh_object(0, new_standard_points);
-        // engine.update_vertex_positions_of_mesh_object_wireframe(0, new_wireframe_points);
+        engine.update_vertex_positions_of_mesh_object(0, new_standard_points);
+        engine.update_vertex_positions_of_mesh_object_wireframe(0, new_wireframe_points);
 
         if (settings.draw_points) {
             // todo: draw debug spheres centered at all points in new_standard_points with the radius settings.point_size and color 0xeeee00.
-
+            for (let point of new_standard_points) {
+                engine.draw_debug_sphere(point, settings.point_size, 0xeeee00, 1.0);
+            }
 
         }
 
