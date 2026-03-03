@@ -30,8 +30,18 @@
 
     let gui = get_default_lil_gui();
 
-    engine.animation_loop(() => {
+    let parameters = {
+        x: 0,
+        y: 0,
+        z: 0
+    };
 
+    gui.add(parameters, 'x', -2, 2).step(0.01);
+    gui.add(parameters, 'y', -2, 2).step(0.01);
+    gui.add(parameters, 'z', -2, 2).step(0.01);
+
+    engine.animation_loop(function() {
+        engine.draw_debug_sphere([parameters.x, parameters.y, parameters.z], 0.04, 0x00eeff, 1.0);
     });
 
 </script>
