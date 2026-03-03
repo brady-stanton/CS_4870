@@ -31,9 +31,19 @@
     let engine = ThreeEngine.new_default_3d();
 
     let gui = get_default_lil_gui();
+    
+    const start_time = performance.now();
+
+    let parameters = {
+        "Time Elapsed": "0.00 s"
+    };
+
+    gui.add(parameters, "Time Elapsed").listen();
 
     engine.animation_loop(() => {
-
+        let elapsed = (performance.now() - start_time) / 1000;
+        parameters["Time Elapsed"] = elapsed.toFixed(2) + " s";
+        refresh_displays(gui);
     });
 
 </script>
