@@ -20,12 +20,151 @@
 </head>
 <body>
 <script type="module">
-    import {ThreeEngine} from "../js/utils/utils_three.js";
+    import {ThreeEngine, get_default_lil_gui, refresh_displays} from "../js/utils/utils_three.js";
 
     // todo: recreate this visualization, demonstrating your understanding of displacement-based distance in SE(2)
     // todo: https://yale-cpsc-487-587-internal-djrakita-c95fa6c3239a481a48d29a6b0fd.gitlab.io/html/visualizations/SE2_distance2.html
     // todo: make sure you are using the displacement-based distance!
     // todo: or, feel free to come up with any visualization here that demonstrates your understanding of SE(2) distance
+
+    let settings = {
+        tx1: 0.0,
+        ty1: 0.0,
+        theta1: 0.0,
+        tx2: 0.0,
+        ty2: 0.0,
+        theta2: 0.0,
+        disp_based_distance: 0.0
+    }
+
+    let actions = {
+        reset1: function() {
+            settings.theta1 = 0.0;
+            settings.tx1 = 0.0;
+            settings.ty1 = 0.0;
+            refresh_displays(gui);
+        },
+
+        reset2: function() {
+            settings.theta2 = 0.0;
+            settings.tx2 = 0.0;
+            settings.ty2 = 0.0;
+            refresh_displays(gui);
+        }
+    };
+
+    let gui = get_default_lil_gui();
+    gui.add(settings, 'theta1', -2 * Math.PI, 2 * Math.PI).name('Theta1');
+    gui.add(settings, 'tx1', -2.0, 2.0).name('tx1');
+    gui.add(settings, 'ty1', -2.0, 2.0).name('ty1');
+    gui.add(actions, 'reset1').name('reset1');
+
+    gui.add(settings, 'theta2', -2 * Math.PI, 2 * Math.PI).name('Theta2');
+    gui.add(settings, 'tx2', -2.0, 2.0).name('tx2');
+    gui.add(settings, 'ty2', -2.0, 2.0).name('ty2');
+    gui.add(actions, 'reset2').name('reset2');
+
+    gui.add(settings, 'disp_based_distance').name('disp-based distance').listen();
+
+    function compute_displacement_distance(theta1, tx1, ty1, theta2, tx2, ty2) {
+        // relative rota, wrap to [-pi, pi]
+        let omega = theta2 - theta1;
+        omega = Math.atan2(Math.sin(omega), Math.cos(omega));
+
+        // relative translation
+        const c1 = Math.cos(theta1);
+        const s1 = Math.sin(theta1);
+
+        const dx = tx2 - tx1;
+        const dy = ty2 - ty1;
+
+        const rel_tx = (c1 * dx) + (s1 * dy);
+        const rel_ty = (-s1 * dx) + (c1 * dy);
+
+        let v_x, v_y;
+
+        const half = omega / 2.0;
+
+        const A = omega / (2.0 * Math.tan(half));
+        const B = omega / 2.0;
+
+        if (Math.abs(omega) < 1e-8) { // if rota very small, just use translation components
+            v_x = rel_tx;
+            v_y = rel_ty;
+        } else {
+            v_x = (A * rel_tx) + (B * rel_ty);
+            v_y = (A * rel_ty) - (B * rel_tx);
+        }
+
+        return Math.sqrt(v_x * v_x + v_y * v_y + omega * omega);
+    }
+    
+    let engine = ThreeEngine.new_default_2d();
+
+    engine.animation_loop(function() {
+        const c1 = Math.cos(settings.theta1);
+        const s1 = Math.sin(settings.theta1);
+
+        // SE(2) matrix 1
+        const R1 = [
+            [c1, -s1, settings.tx1],
+            [s1,  c1, settings.ty1],
+            [0,   0, 1]
+        ];
+
+        const c2 = Math.cos(settings.theta2);
+        const s2 = Math.sin(settings.theta2);
+
+        const R2 = [
+            [c2, -s2, settings.tx2],
+            [s2,  c2, settings.ty2],
+            [0,   0, 1]
+        ];
+
+        // pts matrix 1
+        const pts1 = [
+            [0, 0, 1],
+            [0, 1, 1],
+            [1, 0, 1]
+        ];
+
+        // rotation and translation by SE(2) matrix 1
+        const rotated1 = pts1.map(p => {
+            const x = p[0];
+            const y = p[1];
+
+            return [
+                (c1 * x) - (s1 * y) + settings.tx1,
+                (s1 * x) + (c1 * y) + settings.ty1,
+                1
+            ]
+
+        });
+
+        const pts2 = pts1;
+
+        const rotated2 = pts2.map(p => {
+            const x = p[0];
+            const y = p[1];
+
+            return [
+                (c2 * x) - (s2 * y) + settings.tx2,
+                (s2 * x) + (c2 * y) + settings.ty2,
+                1
+            ]
+
+        });
+
+        engine.draw_debug_vector(rotated1[0], rotated1[1], 0.05, 0.2, 0x3bb143, 1.0);
+        engine.draw_debug_vector(rotated1[0], rotated1[2], 0.05, 0.2, 0xff0000, 1.0);
+
+        engine.draw_debug_vector(rotated2[0], rotated2[1], 0.05, 0.2, 0x0b6623, 1.0);
+        engine.draw_debug_vector(rotated2[0], rotated2[2], 0.05, 0.2, 0x800000, 1.0);
+
+        let d = compute_displacement_distance(settings.theta1, settings.tx1, settings.ty1, settings.theta2, settings.tx2, settings.ty2);
+        settings.disp_based_distance = d;
+        refresh_displays(gui);
+    });
 
 </script>
 </body>
