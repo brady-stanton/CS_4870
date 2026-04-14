@@ -20,7 +20,7 @@
 </head>
 <body>
 <script type="module">
-    import {ThreeEngine} from "../js/utils/utils_three.js";
+    import {ThreeEngine, get_default_lil_gui, refresh_displays} from "../js/utils/utils_three.js";
 
     // todo: create a visualization that demonstrates your knowledge of displacement-based
     // todo: distance over SE(3).  Note that this will use your logarithm solution from PS_U3,
@@ -30,6 +30,135 @@
     // todo: https://yale-cpsc-487-587-internal-djrakita-c95fa6c3239a481a48d29a6b0fd.gitlab.io/html/visualizations/SE2_distance2.html
     // todo: though applied to 3D rotations + translations instead of 2D rotations + translations.
     // todo: Feel free to use the 3x3 matrix inverse function provided by me below if you want.
+
+    let settings = {
+        draw_points: true,
+        draw_wireframe: true,
+        draw_mesh: true,
+        point_size: 0.01,
+        t_x: 0.0,
+        t_y: 0.0,
+        t_z: 0.0,
+        theta1: 0.0,
+        theta2: 0.0,
+        theta3: 0.0
+    }
+
+    let actions = {
+        reset_matrix: function() {
+            settings.theta1 = 0.0;
+            settings.theta2 = 0.0;
+            settings.theta3 = 0.0;
+            settings.t_x = 0.0;
+            settings.t_y = 0.0;
+            settings.t_z = 0.0;
+            refresh_displays(gui);
+        }
+    };
+
+    let gui = get_default_lil_gui();
+    gui.add(settings, 'draw_points').name('Draw Points');
+    gui.add(settings, 'draw_wireframe').name('Draw Wireframe');
+    gui.add(settings, 'draw_mesh').name('Draw Mesh');
+    gui.add(settings, 'point_size', 0.001, 0.03).name('Point Size');
+
+    let folder = gui.addFolder('SE(3) Controls');
+    folder.add(settings, 't_x', -1.0, 1.0).name('Translation X');
+    folder.add(settings, 't_y', -1.0, 1.0).name('Translation Y');
+    folder.add(settings, 't_z', -1.0, 1.0).name('Translation Z');   
+    folder.add(settings, 'theta1', -1 * Math.PI, 1 * Math.PI).name('Rotation x');
+    folder.add(settings, 'theta2', -1 * Math.PI, 1 * Math.PI).name('Rotation y');
+    folder.add(settings, 'theta3', -1 * Math.PI, 1 * Math.PI).name('Rotation z');
+    folder.add(actions, 'reset_matrix').name('Reset');
+
+    let engine = ThreeEngine.new_default_3d();
+    let monkey_idx = engine.add_suzanne_monkey_as_mesh_object(0x00aaff);
+    let original_pts = engine.get_local_vertex_positions_of_mesh_object(monkey_idx);
+    let original_wireframe = engine.get_local_vertex_positions_of_mesh_object_wireframe(monkey_idx);
+
+    engine.animation_loop(function() {
+        // Euler rotations
+        const Rx = [
+            [1, 0, 0],
+            [0, Math.cos(settings.theta1), -Math.sin(settings.theta1)],
+            [0, Math.sin(settings.theta1), Math.cos(settings.theta1)]
+        ];
+
+        const Ry = [
+            [Math.cos(settings.theta2),  0, Math.sin(settings.theta2)],
+            [0,                          1,                         0],
+            [-Math.sin(settings.theta2), 0, Math.cos(settings.theta2)]
+        ];
+
+        const Rz = [
+            [Math.cos(settings.theta3), -Math.sin(settings.theta3), 0],
+            [Math.sin(settings.theta3), Math.cos(settings.theta3),  0],
+            [0,                         0,                          1]
+        ];
+
+        // SO(3) rotation matrix
+        const R = numeric.dot(Rz, numeric.dot(Ry, Rx));
+
+        // translation vector
+        const t = [
+            settings.t_x, 
+            settings.t_y, 
+            settings.t_z
+        ];
+
+        // pts from Suzanne monkey
+        const pts = original_pts;
+
+        // rotation and translation by implicit SE(3) matrix
+        const rota_transl = pts.map(p => {
+            const px = p[0][0];
+            const py = p[1][0];
+            const pz = p[2][0];
+
+            return [
+                (R[0][0] * px) + (R[0][1] * py) + (R[0][2] * pz) + t[0],
+                (R[1][0] * px) + (R[1][1] * py) + (R[1][2] * pz) + t[1],
+                (R[2][0] * px) + (R[2][1] * py) + (R[2][2] * pz) + t[2]
+            ];
+
+        });
+
+        // wireframe from Suzanne monkey
+        const wireframe = original_wireframe;
+
+        const rota_transl_wireframe = wireframe.map(p => {
+            const px = p[0][0];
+            const py = p[1][0];
+            const pz = p[2][0];
+
+            return [
+                (R[0][0] * px) + (R[0][1] * py) + (R[0][2] * pz) + t[0],
+                (R[1][0] * px) + (R[1][1] * py) + (R[1][2] * pz) + t[1],
+                (R[2][0] * px) + (R[2][1] * py) + (R[2][2] * pz) + t[2]
+            ];
+
+        });
+
+        engine.update_vertex_positions_of_mesh_object(monkey_idx, rota_transl);
+        engine.update_vertex_positions_of_mesh_object_wireframe(monkey_idx, rota_transl_wireframe);
+        if (settings.draw_points) {
+            for (let i = 0; i < rota_transl.length; i++) {
+                engine.draw_debug_sphere(rota_transl[i], settings.point_size, 0xfff200, 1.0);
+            }
+        }
+
+        if (settings.draw_wireframe) {
+            engine.set_mesh_object_wireframe_visibility(monkey_idx, true);
+        } else {
+            engine.set_mesh_object_wireframe_visibility(monkey_idx, false);
+        }
+
+        if (settings.draw_mesh && !engine.mesh_objects[monkey_idx].visible) {
+            engine.toggle_mesh_object_visibility(monkey_idx, true);
+        } else if (!settings.draw_mesh && engine.mesh_objects[monkey_idx].visible) {
+            engine.toggle_mesh_object_visibility(monkey_idx, false);
+        }
+    });
 
     // A must be a 3x3 matrix in row major order
     // [[a11, a12, a13], [a21, a22, a23], [a31, a32, a33]]
