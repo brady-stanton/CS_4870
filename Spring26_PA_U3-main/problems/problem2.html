@@ -20,11 +20,135 @@
 </head>
 <body>
 <script type="module">
-    import {get_default_lil_gui, ThreeEngine, refresh_displays} from "../js/utils/utils_three.js";
+    import {ThreeEngine, get_default_lil_gui, refresh_displays} from "../js/utils/utils_three.js";
+    import * as THREE from 'three';
 
     // todo: create a visualization that demonstrates your knowledge of quaternions.  This is intentionally
     // todo: open-ended.  Be as creative as you want, or feel free to recreate any of the visualizations
     // todo: found in Section 3.3.
+
+    let settings = {
+        draw_points: true,
+        draw_wireframe: true,
+        draw_mesh: true,
+        point_size: 0.01,
+        t_x: 0.0,
+        t_y: 0.0,
+        t_z: 0.0,
+        theta1: 0.0,
+        theta2: 0.0,
+        theta3: 0.0
+    }
+
+    let actions = {
+        reset_matrix: function() {
+            settings.theta1 = 0.0;
+            settings.theta2 = 0.0;
+            settings.theta3 = 0.0;
+            settings.t_x = 0.0;
+            settings.t_y = 0.0;
+            settings.t_z = 0.0;
+            refresh_displays(gui);
+        }
+    };
+
+    let gui = get_default_lil_gui();
+    gui.add(settings, 'draw_points').name('Draw Points');
+    gui.add(settings, 'draw_wireframe').name('Draw Wireframe');
+    gui.add(settings, 'draw_mesh').name('Draw Mesh');
+    gui.add(settings, 'point_size', 0.001, 0.03).name('Point Size');
+
+    let folder = gui.addFolder('Quaternion Controls');
+    folder.add(settings, 't_x', -1.0, 1.0).name('Translation X');
+    folder.add(settings, 't_y', -1.0, 1.0).name('Translation Y');
+    folder.add(settings, 't_z', -1.0, 1.0).name('Translation Z');   
+    folder.add(settings, 'theta1', -1 * Math.PI, 1 * Math.PI).name('Rotation x');
+    folder.add(settings, 'theta2', -1 * Math.PI, 1 * Math.PI).name('Rotation y');
+    folder.add(settings, 'theta3', -1 * Math.PI, 1 * Math.PI).name('Rotation z');
+    folder.add(actions, 'reset_matrix').name('Reset');
+
+    let engine = ThreeEngine.new_default_3d();
+    let monkey_idx = engine.add_suzanne_monkey_as_mesh_object(0x00aaff);
+    let original_pts = engine.get_local_vertex_positions_of_mesh_object(monkey_idx);
+    let original_wireframe = engine.get_local_vertex_positions_of_mesh_object_wireframe(monkey_idx);
+
+    engine.animation_loop(function() {
+        // x, y, z quaternions
+        const qx = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), settings.theta1);
+        const qy = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), settings.theta2);
+        const qz = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), settings.theta3);
+
+        // H1 quaternion
+        const q = new THREE.Quaternion();
+        q.multiplyQuaternions(qz, qy);
+        q.multiply(qx);
+
+        // translation vector
+        const t = [
+            settings.t_x, 
+            settings.t_y, 
+            settings.t_z
+        ];
+
+        // pts from Suzanne monkey
+        const pts = original_pts;
+
+        // rotation and translation by implicit SE(3) with H1 quaternions
+        const rota_transl = pts.map(p => {
+            const px = p[0][0];
+            const py = p[1][0];
+            const pz = p[2][0];
+
+            const v = new THREE.Vector3(px, py, pz);
+            v.applyQuaternion(q);
+
+            return [
+                (v.x) + t[0],
+                (v.y) + t[1],
+                (v.z) + t[2]
+            ];
+
+        });
+
+        // wireframe from Suzanne monkey
+        const wireframe = original_wireframe;
+
+        const rota_transl_wireframe = wireframe.map(p => {
+            const px = p[0][0];
+            const py = p[1][0];
+            const pz = p[2][0];
+
+            const v = new THREE.Vector3(px, py, pz);
+            v.applyQuaternion(q);
+
+            return [
+                (v.x) + t[0],
+                (v.y) + t[1],
+                (v.z) + t[2]
+            ];
+
+        });
+
+        engine.update_vertex_positions_of_mesh_object(monkey_idx, rota_transl);
+        engine.update_vertex_positions_of_mesh_object_wireframe(monkey_idx, rota_transl_wireframe);
+        if (settings.draw_points) {
+            for (let i = 0; i < rota_transl.length; i++) {
+                engine.draw_debug_sphere(rota_transl[i], settings.point_size, 0xfff200, 1.0);
+            }
+        }
+
+        if (settings.draw_wireframe) {
+            engine.set_mesh_object_wireframe_visibility(monkey_idx, true);
+        } else {
+            engine.set_mesh_object_wireframe_visibility(monkey_idx, false);
+        }
+
+        if (settings.draw_mesh && !engine.mesh_objects[monkey_idx].visible) {
+            engine.toggle_mesh_object_visibility(monkey_idx, true);
+        } else if (!settings.draw_mesh && engine.mesh_objects[monkey_idx].visible) {
+            engine.toggle_mesh_object_visibility(monkey_idx, false);
+        }
+    });
 
 </script>
 </body>
