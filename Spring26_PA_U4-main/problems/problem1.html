@@ -20,31 +20,279 @@
 </head>
 <body>
 <script type="module">
-    import {ThreeEngine} from "../js/utils/utils_three.js";
-    import {B1Z1Robot, XArm7Robot} from "../js/utils/utils_robot.js";
+    import {ThreeEngine, get_default_lil_gui, refresh_displays, z_up_set_object_pose_from_SE3_matrix} from "../js/utils/utils_three.js";
+    import {XArm7Robot} from "../js/utils/utils_robot.js";
+    import * as THREE from 'three';
 
-    // todo: create a visualization that demonstrates your knowledge of forward kinematics on a robot model.
-    // todo: The "default" assignment is to recreate this visualization:
-    // todo: https://yale-cpsc-487-587-internal-djrakita-c95fa6c3239a481a48d29a6b0fd.gitlab.io/html/unit4_visualizations/fk.html
-    // todo: or this visualization:
-    // todo: https://yale-cpsc-487-587-internal-djrakita-c95fa6c3239a481a48d29a6b0fd.gitlab.io/html/unit4_visualizations/fk2.html
-    // todo: however, feel free to deviate from this if you want to.
-    // todo: I will be adding information to the class wiki on important properties and subroutines regarding the robot
-    // todo: object created for this class.  If you have questions, refer to that wiki or ask me over slack.
-
+    // engine and robot
     let engine = ThreeEngine.new_default_3d();
-
-    // if you want to use the XArm7 robot:
     let robot = new XArm7Robot();
 
-    // or, if you want to use the B1Z1 robot, comment the previous robot and uncomment this line:
-    // let robot = new B1Z1Robot();
+    // GUI settings
+    let settings = {
+        mesh_visible: true,
+        wireframe_visible: false,
+        reset: function() { reset_joints(); }
+    };
 
-    // this will spawn all of the robot's links at the origin
-    robot.spawn_robot(engine);
+    // joint sliders for the 8 joints (revolute joints 3..9, and the base track)
+    let joint_idxs = [1, 3, 4, 5, 6, 7, 8, 9];
+    let joint_vals = {};
+
+    let gui = get_default_lil_gui();
+    gui.add(settings, 'mesh_visible').name('Mesh').onChange(v => { robot.set_mesh_visibility(engine, v); });
+    gui.add(settings, 'wireframe_visible').name('Wireframe').onChange(v => { robot.set_wireframe_visibility(engine, v); });
+
+    let jointFolder = gui.addFolder('DOFs');
+
+    function reset_joints() {
+        joint_idxs.forEach((j_idx, i) => {
+            let joint = robot.joints[j_idx];
+            joint_vals['j' + i] = 0.0;
+        });
+        refresh_displays(gui);
+    }
+
+    // initialize joint values and add sliders
+    robot.joints.forEach((joint, idx) => {});
+
+    joint_idxs.forEach((j_idx, i) => {
+        let j = robot.joints[j_idx];
+        let lower = (j.lower_bound !== undefined) ? j.lower_bound : -Math.PI;
+        let upper = (j.upper_bound !== undefined) ? j.upper_bound : Math.PI;
+        joint_vals['j' + i] = 0.0;
+        jointFolder.add(joint_vals, 'j' + i, lower, upper, 0.001).name('dof' + i);
+    });
+
+    jointFolder.open();
+
+    // action folder: reset joints, select/deselect all axes
+    let actionFolder = gui.addFolder('Actions');
+
+    actionFolder.add(settings, 'reset').name('Reset Joints');
+
+    actionFolder.add({select_all_axes: function() {
+        for (let i = 0; i < axesControllers.length; i++) { 
+            axesControllers[i].setValue(true);
+        }
+        for (let i = 0; i < axisHelpers.length; i++) { 
+            if (axisHelpers[i]) {
+                axisHelpers[i].visible = true;
+            }
+            show_axes[i] = true; 
+        }
+    }}, 'select_all_axes').name('Select All Links');
+
+    actionFolder.add({deselect_all_axes: function() {
+        for (let i = 0; i < axesControllers.length; i++) { 
+            axesControllers[i].setValue(false);
+        }
+        for (let i = 0; i < axisHelpers.length; i++) { 
+            if (axisHelpers[i]) {
+                axisHelpers[i].visible = false; 
+            }
+            show_axes[i] = false; 
+        }
+    }}, 'deselect_all_axes').name('Deselect All Links');
+
+    actionFolder.open();
+
+    // link axes toggles 
+    let axesFolder = gui.addFolder('Links');
+
+    let show_axes = [];
+    for (let i = 0; i < robot.num_links(); i++) { 
+        show_axes.push(false); 
+    }
+
+    let axesControllers = [];
+    for (let i = 0; i < robot.num_links(); i++) {
+        let key = 'link' + i;
+        let obj = {};
+        obj[key] = false;
+        let c = axesFolder.add(obj, key).name(
+            robot.links[i].link_name + ' [' + i + ']').onChange(v => { 
+                show_axes[i] = v; 
+                if (axisHelpers[i]) {
+                    axisHelpers[i].visible = v
+                }; 
+            });
+        axesControllers.push(c);
+    }
+
+    axesFolder.open();
+
+    // wait for spawn of robot and create axis helpers
+    let axisHelpers = [];
+    (async () => {
+        await robot.spawn_robot(engine);
+
+        for (let i = 0; i < robot.num_links(); i++) {
+            let ah = new THREE.AxesHelper(0.08);
+            ah.visible = false;
+            axisHelpers.push(ah);
+            engine.scene.add(ah);
+        }
+    })();
+
+    // helper math functions for transforms
+    function get_rpy_SO3_matrix(rpy) {
+        let cx = Math.cos(rpy[0]); 
+        let sx = Math.sin(rpy[0]);
+        let cy = Math.cos(rpy[1]); 
+        let sy = Math.sin(rpy[1]);
+        let cz = Math.cos(rpy[2]); 
+        let sz = Math.sin(rpy[2]);
+
+        const Rx = [[1, 0, 0],    [0, cx, -sx], [0, sx, cx]];
+        const Ry = [[cy, 0, sy],  [0, 1, 0],    [-sy, 0, cy]];
+        const Rz = [[cz, -sz, 0], [sz, cz, 0],  [0, 0, 1]];
+
+        return mul3(mul3(Rx, Ry), Rz);
+    }
+
+    function get_xyz_rpy_SE3_matrix(xyz, rpy) {
+        let R = get_rpy_SO3_matrix(rpy);
+        return [
+            [R[0][0], R[0][1], R[0][2], xyz[0]],
+            [R[1][0], R[1][1], R[1][2], xyz[1]],
+            [R[2][0], R[2][1], R[2][2], xyz[2]],
+            [0,       0,       0,       1]
+        ];
+    }
+
+    function mul3(A,B) {
+        let C = [[0,0,0], [0,0,0], [0,0,0]];
+        for (let i = 0; i < 3; i++) {
+            for (let j = 0; j < 3; j++) {
+                for (let k = 0; k < 3; k++) {
+                    C[i][j] += A[i][k] * B[k][j];
+                }
+            }
+        }
+        return C;
+    }
+
+    function mul4(A,B) {
+        let C = Array.from({length:4}, ()=> [0,0,0,0]);
+        for (let i=0;i<4;i++) {
+            for (let j=0;j<4;j++) {
+                for (let k=0;k<4;k++) {
+                    C[i][j] += A[i][k] * B[k][j];
+                }
+            }
+        }
+        return C;
+    }
+
+    function axis_angle_transform(axis, angle) {
+        // axis: [[x],[y],[z]] or [x,y,z]
+        let x = Array.isArray(axis[0]) ? axis[0][0] : axis[0];
+        let y = Array.isArray(axis[1]) ? axis[1][0] : axis[1];
+        let z = Array.isArray(axis[2]) ? axis[2][0] : axis[2];
+
+        let mag = Math.hypot(x,y,z);
+        if (mag === 0) { 
+            x = 1; 
+            mag = 1; 
+        }
+        x /= mag; 
+        y /= mag; 
+        z /= mag;
+
+        let c = Math.cos(angle); 
+        let s = Math.sin(angle); 
+        let t = 1 - c;
+
+        let R = [
+            [t*x*x + c,   t*x*y - s*z, t*x*z + s*y],
+            [t*x*y + s*z, t*y*y + c,   t*y*z - s*x],
+            [t*x*z - s*y, t*y*z + s*x, t*z*z + c]
+        ];
+
+        return [[R[0][0],R[0][1],R[0][2],0],
+                [R[1][0],R[1][1],R[1][2],0],
+                [R[2][0],R[2][1],R[2][2],0],
+                [0,      0,      0,      1]];
+    }
+
+    function translation_along_axis(axis, dist) {
+        let x = Array.isArray(axis[0]) ? axis[0][0] : axis[0];
+        let y = Array.isArray(axis[1]) ? axis[1][0] : axis[1];
+        let z = Array.isArray(axis[2]) ? axis[2][0] : axis[2];
+
+        return [[1,0,0,x*dist],
+                [0,1,0,y*dist],
+                [0,0,1,z*dist],
+                [0,0,0,1]];
+    }
+
+    // compute forward kinematics for each link
+    function compute_forward_kinematics() {
+        let linkTransforms = [];
+        // identity for world
+        linkTransforms[0] = [[1,0,0,0],[0,1,0,0],[0,0,1,0],[0,0,0,1]];
+
+        // iterate joints in index order
+        for (let j_idx = 0; j_idx < robot.joints.length; j_idx++) {
+            let joint = robot.joints[j_idx];
+            let parent = joint.parent_link_idx;
+            let child = joint.child_link_idx;
+            let T_parent = linkTransforms[parent];
+            if (!T_parent) { 
+                T_parent = linkTransforms[0]; 
+            }
+
+            // fixed offset
+            let T_offset = get_xyz_rpy_SE3_matrix(joint.xyz, joint.rpy);
+
+            // joint motion
+            let T_motion = linkTransforms[0];
+            if (joint.get_joint_type_string() === 'revolute') {
+                // find slider value mapping
+                let sliderIdx = joint_idxs.indexOf(j_idx);
+                let angle = 0.0;
+                if (sliderIdx >= 0) {
+                    angle = joint_vals['j' + sliderIdx];
+                } else {
+                    angle = 0.0;
+                }
+                T_motion = axis_angle_transform(joint.axis, angle);
+            } else if (joint.get_joint_type_string() === 'prismatic') {
+                let sliderIdx = joint_idxs.indexOf(j_idx);
+                let disp = 0.0;
+                if (sliderIdx >=0) {
+                    disp = joint_vals['j' + sliderIdx];
+                } else {
+                    disp = 0.0;
+                }
+                T_motion = translation_along_axis(joint.axis, disp);
+            }
+
+            // child transform = parent * offset * motion
+            let T = mul4(mul4(T_parent, T_offset), T_motion);
+            linkTransforms[child] = T;
+        }
+
+        return linkTransforms;
+    }
+
+    // update meshes and axis helpers
+    function apply_link_transforms(linkTransforms) {
+        for (let i = 0; i < linkTransforms.length; i++) {
+            if (!linkTransforms[i]) continue;
+            robot.set_link_mesh_pose_from_SE3_matrix(engine, i, linkTransforms[i]);
+
+            if (axisHelpers[i]) {
+                let T = linkTransforms[i];
+                z_up_set_object_pose_from_SE3_matrix(axisHelpers[i], T);
+            }
+        }
+    }
 
     engine.animation_loop( ()  => {
-
+        let linkTransforms = compute_forward_kinematics();
+        apply_link_transforms(linkTransforms);
     });
 
 </script>
