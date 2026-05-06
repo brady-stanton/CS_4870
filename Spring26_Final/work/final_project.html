@@ -1,0 +1,335 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <title>CPSC 487/587</title>
+    <script src="https://polyfill.io/v3/polyfill.min.js?features=es6"></script>
+    <script id="MathJax-script" async src="https://cdn.jsdelivr.net/npm/mathjax@3/es5/tex-mml-chtml.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/lil-gui@0.19.1/dist/lil-gui.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/mathjs/10.3.0/math.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/quaternion@1.5.1/quaternion.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/numeric@1.2.6/numeric-1.2.6.min.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/stats.js@0.17.0/build/stats.min.js"></script>
+    <script type="importmap">
+        {
+            "imports": {
+              "three": "https://unpkg.com/three@0.160.0/build/three.module.js",
+              "three/": "https://unpkg.com/three@0.160.0/"
+            }
+        }
+    </script>
+</head>
+<body>
+<script type="module">
+    import {ThreeEngine, get_default_lil_gui, refresh_displays} from "../js/utils/utils_three.js";
+    import * as THREE from 'three';
+
+    // Final Project: 3d model of 3x3 Rubik's cube with interactive rotations, scrambling, and reset
+    // uses quaternions for animating face rotations
+
+    let gui = get_default_lil_gui();
+    let engine = ThreeEngine.new_default_3d();
+
+    // 3x3 rubik's cube made of 27 smaller cubes
+    const cubes = []; // {mesh, coord: [x,y,z]}
+    const size = 0.9;
+    const gap = 0.05;
+    const spacing = size + gap;
+
+    const cubeParent = engine.scene;
+
+    // face colors used: px is red, nx is orange, py is yellow, ny is white, pz is blue, nz is green
+    const faceColors = {
+        px: 0xff0000, nx: 0xff8000, py: 0xffff00, ny: 0xffffff, pz: 0x0000ff, nz: 0x00ff00
+    };
+
+    function makeCube(x,y,z) { // for creating the 27 smaller cubes
+        const geom = new THREE.BoxGeometry(size, size, size);
+
+        const faceColorsArr = [];
+        const black = 0x111111;
+
+        // only outer faces colored, inner are black
+        faceColorsArr.push(x === 1 ? faceColors.px : black); 
+        faceColorsArr.push(x === -1 ? faceColors.nx : black);
+        faceColorsArr.push(y === 1 ? faceColors.py : black);
+        faceColorsArr.push(y === -1 ? faceColors.ny : black);
+        faceColorsArr.push(z === 1 ? faceColors.pz : black);
+        faceColorsArr.push(z === -1 ? faceColors.nz : black);
+
+        const materials = faceColorsArr.map(c => new THREE.MeshStandardMaterial({color: c}));
+
+        const mesh = new THREE.Mesh(geom, materials);
+        mesh.castShadow = true;
+        mesh.receiveShadow = true;
+        mesh.position.set(x * spacing, y * spacing, z * spacing);
+        cubeParent.add(mesh);
+        return mesh;
+    }
+
+    for (let xi = -1; xi <= 1; xi++) {
+        for (let yi = -1; yi <= 1; yi++) {
+            for (let zi = -1; zi <= 1; zi++) {
+                let m = makeCube(xi, yi, zi);
+                cubes.push({
+                    mesh: m, 
+                    coord: [xi, yi, zi], // logical coord, used for rotating cubes as a group
+                    origCoord: [xi, yi, zi] // for resetting to solved state
+                });
+            }
+        }
+    }
+
+    // anim state for rotating a slice
+    let anim = { active: false, group: null, axis: null, coord: null, remaining: 0, speed: Math.PI/30 };
+    // queue of pending moves {axis, coord, angle}
+    let moveQueue = [];
+
+    function rotateSlice(axis, coord, angle) {
+        if (anim.active) { // if already animating, queue for later
+            moveQueue.push({axis:axis, coord:coord, angle:angle}); 
+            return; 
+        }
+
+        // pick cubes matching coord on axis (ex. axis x and coord 1 is all cubes x=1)
+        const toRotate = [];
+        cubes.forEach(c => {
+            if (axis === 'x' && c.coord[0] === coord) toRotate.push(c);
+            if (axis === 'y' && c.coord[1] === coord) toRotate.push(c);
+            if (axis === 'z' && c.coord[2] === coord) toRotate.push(c);
+        });
+
+        // create temporary group for rotation and add meshes
+        const g = new THREE.Group();
+        cubeParent.add(g);
+
+        // helper to attach mesh to a new group but keeping its world pose
+        function attachPreserveWorld(mesh, newParent) {
+            const worldPos = new THREE.Vector3();
+            const worldQuat = new THREE.Quaternion();
+            mesh.getWorldPosition(worldPos);
+            mesh.getWorldQuaternion(worldQuat);
+
+            newParent.add(mesh);
+
+            // convert world position to new group's local coordinates
+            const localPos = newParent.worldToLocal(worldPos.clone());
+            mesh.position.copy(localPos);
+
+            // compute local quaternion = parentWorldQuat^{-1} * worldQuat
+            const parentWorldQuat = new THREE.Quaternion();
+            newParent.getWorldQuaternion(parentWorldQuat);
+            parentWorldQuat.invert();
+            const localQuat = parentWorldQuat.multiply(worldQuat);
+            mesh.quaternion.copy(localQuat);
+        }
+
+        toRotate.forEach(c => {
+            attachPreserveWorld(c.mesh, g);
+        });
+
+        // set animation state
+        anim.active = true;
+        anim.group = g;
+        anim.axis = axis;
+        anim.coord = coord;
+        anim.remaining = angle;
+        anim.direction = Math.sign(angle) || 1;
+        anim.targetAngle = angle;
+        if (axis === 'x') anim.axisVec = new THREE.Vector3(1,0,0);
+        if (axis === 'y') anim.axisVec = new THREE.Vector3(0,1,0);
+        if (axis === 'z') anim.axisVec = new THREE.Vector3(0,0,1);
+    }
+
+    // helper to rotate a logical coord abt axis by 90 deg in given dir
+    function rotateCoordinate(coord, axis, direction) {
+        const rotQuat = new THREE.Quaternion();
+        const angle = direction * Math.PI / 2;
+        
+        if (axis === 'x') {
+            rotQuat.setFromAxisAngle(new THREE.Vector3(1, 0, 0), angle);
+        } else if (axis === 'y') {
+            rotQuat.setFromAxisAngle(new THREE.Vector3(0, 1, 0), angle);
+        } else if (axis === 'z') {
+            rotQuat.setFromAxisAngle(new THREE.Vector3(0, 0, 1), angle);
+        }
+        
+        const coordVec = new THREE.Vector3(coord[0], coord[1], coord[2]);
+        coordVec.applyQuaternion(rotQuat);
+
+        return [Math.round(coordVec.x), Math.round(coordVec.y), Math.round(coordVec.z)];
+    }
+
+    // helper to reattach cubes to scene and update their coords after rotation
+    function finalizeRotation() {
+        const g = anim.group;
+        const axis = anim.axis;
+        // compute rotation matrix for 90deg steps
+        const dir = anim.direction || 1;
+        // for each child mesh, reparent to scene and update coord
+        const children = g.children.slice();
+        children.forEach(mesh => {
+            // world pos/rota
+            const wp = new THREE.Vector3();
+            const wq = new THREE.Quaternion();
+            const ws = new THREE.Vector3();
+
+            mesh.matrixWorld.decompose(wp, wq, ws);
+            cubeParent.add(mesh);
+            mesh.position.copy(wp);
+
+            // snap world quaternion to nearest 90deg increments
+            // converts to Euler to round, then back to quaternion
+            const e = new THREE.Euler().setFromQuaternion(wq, 'XYZ');
+            const step = Math.PI / 2;
+            e.x = Math.round(e.x / step) * step;
+            e.y = Math.round(e.y / step) * step;
+            e.z = Math.round(e.z / step) * step;
+            mesh.quaternion.setFromEuler(e);
+
+            // find corresp cube entry, update logical coord, snap to grid
+            const cobj = cubes.find(c => c.mesh === mesh);
+            if (cobj) {
+                const newCoord = rotateCoordinate(cobj.coord, axis, dir);
+                cobj.coord = newCoord;
+                mesh.position.set(newCoord[0] * spacing, newCoord[1] * spacing, newCoord[2] * spacing);
+            }
+        });
+
+        // remove group
+        cubeParent.remove(g);
+        anim.active = false;
+        anim.group = null;
+
+        // start next queued move if exists
+        if (moveQueue.length > 0) {
+            const m = moveQueue.shift();
+            rotateSlice(m.axis, m.coord, m.angle);
+        }
+    }
+
+    // GUI for rotating faces
+    const rotaGui = gui.addFolder('Rotation Controls');
+    rotaGui.add({U: () => rotateSlice('y', 1, -Math.PI/2)}, 'U').name('U');
+    rotaGui.add({Ui: () => rotateSlice('y', 1, Math.PI/2)}, 'Ui').name("U'");
+    rotaGui.add({D: () => rotateSlice('y', -1, Math.PI/2)}, 'D').name('D');
+    rotaGui.add({Di: () => rotateSlice('y', -1, -Math.PI/2)}, 'Di').name("D'");
+    rotaGui.add({L: () => rotateSlice('x', -1, Math.PI/2)}, 'L').name('L');
+    rotaGui.add({Li: () => rotateSlice('x', -1, -Math.PI/2)}, 'Li').name("L'");
+    rotaGui.add({R: () => rotateSlice('x', 1, -Math.PI/2)}, 'R').name('R');
+    rotaGui.add({Ri: () => rotateSlice('x', 1, Math.PI/2)}, 'Ri').name("R'");
+    rotaGui.add({F: () => rotateSlice('z', 1, -Math.PI/2)}, 'F').name('F');
+    rotaGui.add({Fi: () => rotateSlice('z', 1, Math.PI/2)}, 'Fi').name("F'");
+    rotaGui.add({B: () => rotateSlice('z', -1, Math.PI/2)}, 'B').name('B');
+    rotaGui.add({Bi: () => rotateSlice('z', -1, -Math.PI/2)}, 'Bi').name("B'");
+    rotaGui.open();
+
+    // GUI for scramble and reset
+    const controlsGui = gui.addFolder('Buttons');
+    controlsGui.add({scramble: function() {
+        // generate random sequence of 26-36 moves
+        const moves = Math.floor(Math.random() * 10) + 26;
+        const axes = ['x','y','z'];
+
+        for (let i = 0; i < moves; i++) {
+            const axis = axes[Math.floor(Math.random()*3)];
+            const coord = [-1,0,1][Math.floor(Math.random()*3)];
+            const angle = (Math.random() < 0.5) ? Math.PI/2 : -Math.PI/2;
+            moveQueue.push({axis: axis, coord: coord, angle: angle});
+        }
+        
+        if (!anim.active && moveQueue.length > 0) {
+            const m = moveQueue.shift();
+            rotateSlice(m.axis, m.coord, m.angle);
+        }
+    }}, 'scramble').name('Scramble');
+
+    controlsGui.add({reset: function() {
+        // clear queue and stop current animation
+        moveQueue = [];
+
+        if (anim.active && anim.group) {
+            // reparent children to scene preserving world pose
+            const children = anim.group.children.slice();
+            children.forEach(mesh => {
+                const wp = new THREE.Vector3();
+                const wq = new THREE.Quaternion();
+                const ws = new THREE.Vector3();
+                mesh.matrixWorld.decompose(wp, wq, ws);
+                cubeParent.add(mesh);
+                mesh.position.copy(wp);
+                mesh.quaternion.copy(wq);
+            });
+            cubeParent.remove(anim.group);
+            anim.active = false;
+            anim.group = null;
+        }
+
+        // reset logical coords and visuals to solved state
+        cubes.forEach(c => {
+            c.coord = [c.origCoord[0], c.origCoord[1], c.origCoord[2]];
+            c.mesh.position.set(c.coord[0] * spacing, c.coord[1] * spacing, c.coord[2] * spacing);
+            c.mesh.rotation.set(0,0,0);
+            c.mesh.quaternion.set(0,0,0,1);
+        });
+    }}, 'reset').name('Reset Cube');
+
+    engine.animation_loop(function() {
+        if (anim.active && anim.group) {
+            const step = Math.sign(anim.remaining) * anim.speed;
+            const toApply = Math.abs(step) > Math.abs(anim.remaining) ? anim.remaining : step;
+            
+            // rotate the group by toApply rad abt the axis in world space
+            if (anim.axisVec) {
+                anim.group.rotateOnWorldAxis(anim.axisVec, toApply);
+            }
+
+            anim.remaining -= toApply;
+
+            // finalize once reached the target angle
+            if (Math.abs(anim.remaining) < 1e-6) { 
+                finalizeRotation();
+            }
+        }
+    });
+
+    // A must be a 3x3 matrix in row major order
+    // [[a11, a12, a13], [a21, a22, a23], [a31, a32, a33]]
+    function matrix_inverse_3x3(A) {
+        let det = A[0][0] * (A[1][1] * A[2][2] - A[2][1] * A[1][2]) -
+            A[0][1] * (A[1][0] * A[2][2] - A[1][2] * A[2][0]) +
+            A[0][2] * (A[1][0] * A[2][1] - A[1][1] * A[2][0]);
+
+        if (det === 0) {
+            return null; // No inverse exists if determinant is 0
+        }
+
+        let cofactors = [
+            [
+                (A[1][1] * A[2][2] - A[2][1] * A[1][2]),
+                -(A[1][0] * A[2][2] - A[1][2] * A[2][0]),
+                (A[1][0] * A[2][1] - A[2][0] * A[1][1])
+            ],
+            [
+                -(A[0][1] * A[2][2] - A[0][2] * A[2][1]),
+                (A[0][0] * A[2][2] - A[0][2] * A[2][0]),
+                -(A[0][0] * A[2][1] - A[2][0] * A[0][1])
+            ],
+            [
+                (A[0][1] * A[1][2] - A[0][2] * A[1][1]),
+                -(A[0][0] * A[1][2] - A[1][0] * A[0][2]),
+                (A[0][0] * A[1][1] - A[1][0] * A[0][1])
+            ]
+        ];
+
+        let adjugate = [
+            [cofactors[0][0] / det, cofactors[1][0] / det, cofactors[2][0] / det],
+            [cofactors[0][1] / det, cofactors[1][1] / det, cofactors[2][1] / det],
+            [cofactors[0][2] / det, cofactors[1][2] / det, cofactors[2][2] / det]
+        ];
+
+        return adjugate;
+    }
+
+</script>
+</body>
+</html>
